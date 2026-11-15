@@ -281,6 +281,7 @@ private:
     ToolCallback callback_;
     ContextToolCallback context_callback_ = nullptr;
     bool user_only_ = false;
+    bool background_ = false;
 
 public:
     McpTool(const std::string& name, const std::string& description, const PropertyList& properties,
@@ -295,6 +296,8 @@ public:
           context_callback_(callback) {}
 
     void set_user_only(bool user_only) { user_only_ = user_only; }
+    void set_background() { background_ = true; }
+    bool background() const { return background_; }
     inline const std::string& name() const { return name_; }
     inline const std::string& description() const { return description_; }
     inline const PropertyList& properties() const { return properties_; }
@@ -465,6 +468,8 @@ public:
     // see what the total became.
     void LogToolInventory() const;
     void AddTool(std::unique_ptr<McpTool> tool);
+    void AddBackgroundTool(const std::string& name, const std::string& description,
+                           const PropertyList& properties, ToolCallback callback);
     void AddTool(const std::string& name, const std::string& description,
                  const PropertyList& properties, ToolCallback callback);
     void AddTool(const std::string& name, const std::string& description,
@@ -494,6 +499,7 @@ private:
                     ResponseSender response_sender);
 
     std::vector<std::unique_ptr<McpTool>> tools_;
+    bool background_tool_running_ = false;  // Accessed only on the application task.
 };
 
 #endif  // MCP_SERVER_H

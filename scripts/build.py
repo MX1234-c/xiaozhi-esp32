@@ -1623,17 +1623,27 @@ def build_board(
         )
         wake_word_supported = _board_supports_wake_word(target, sdkconfig_append)
         requested_wake_word = wake_word
-        if requested_wake_word is None:
-            requested_wake_word = "disabled"
-            if wake_word_supported:
-                requested_wake_word = (
-                    "nihaoxiaozhi" if selected_language in {"zh-CN", "zh-TW"} else "hiesp"
-                )
-        (
-            selected_wake_word,
-            wake_word_options,
-            wake_word_symbols,
-        ) = _wake_word_sdkconfig_options(requested_wake_word, target)
+        presets = _sdkconfig_assignments(sdkconfig_append)
+        use_custom_preset = (
+            requested_wake_word is None
+            and presets.get("CONFIG_USE_CUSTOM_WAKE_WORD") == "y"
+        )
+        if use_custom_preset:
+            selected_wake_word = "custom"
+            wake_word_options = []
+            wake_word_symbols = ["CONFIG_USE_CUSTOM_WAKE_WORD"]
+        else:
+            if requested_wake_word is None:
+                requested_wake_word = "disabled"
+                if wake_word_supported:
+                    requested_wake_word = (
+                        "nihaoxiaozhi" if selected_language in {"zh-CN", "zh-TW"} else "hiesp"
+                    )
+            (
+                selected_wake_word,
+                wake_word_options,
+                wake_word_symbols,
+            ) = _wake_word_sdkconfig_options(requested_wake_word, target)
         if selected_wake_word != "disabled" and not wake_word_supported:
             raise ValueError(
                 f"Wake-word detection is disabled or unsupported for {final_name!r}; "

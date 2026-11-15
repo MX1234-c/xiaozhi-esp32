@@ -17,8 +17,103 @@
 #include <esp_lcd_touch_ft5x06.h>
 #include <esp_lvgl_port.h>
 #include <lvgl.h>
+#include <string_view>
 
 #define TAG "LichuangDevBoard"
+
+namespace {
+
+constexpr char kRoomLightUrl[] = "http://192.168.101.246/api/light";
+
+std::expected<std::string, std::string> RequestRoomLight(const char* method,
+                                                        std::string body = {}) {
+    auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
+    if (!http) {
+        return std::unexpected("Could not create room light HTTP client");
+    }
+    http->SetTimeout(2000);
+    if (!body.empty()) {
+        http->SetHeader("Content-Type", "application/json");
+        http->SetContent(std::move(body));
+    }
+    if (!http->Open(method, kRoomLightUrl)) {
+        return std::unexpected("Could not connect to the room light");
+    }
+    const auto status = http->GetStatusCode();
+    if (!status || *status != 200) {
+        http->Close();
+        if (!status) {
+            return std::unexpected("No HTTP response from the room light");
+        }
+        if (*status == 202) {
+            return std::unexpected("Light settings accepted, but a temporary display is active");
+        }
+        return std::unexpected("Room light returned HTTP " + std::to_string(*status));
+    }
+
+    // The lamp returns a small JSON state object.
+    std::string response;
+    char buffer[128];
+    while (true) {
+        const auto size = http->Read(buffer, sizeof(buffer));
+        if (!size || response.size() + *size > 512) {
+            http->Close();
+            return std::unexpected("Could not read room light state");
+        }
+        if (*size == 0) {
+            break;
+        }
+        response.append(buffer, *size);
+    }
+    http->Close();
+    return response;
+}
+
+ToolResult UpdateRoomLight(std::string body) {
+    auto response = RequestRoomLight("POST", std::move(body));
+    if (!response) {
+        return std::unexpected(response.error());
+    }
+    CJsonUniquePtr state(cJSON_Parse(response->c_str()));
+    const auto* output = cJSON_GetObjectItemCaseSensitive(state.get(), "led_output");
+    if (!cJSON_IsString(output) || std::string_view(output->valuestring) != "LED READY") {
+        return std::unexpected("Room light did not confirm the update");
+    }
+    return ReturnValue(std::move(*response));
+}
+
+ToolResult SetRoomLightPower(const PropertyList& properties) {
+    if (!properties["on"].value<bool>()) {
+        return UpdateRoomLight(R"({"on":false})");
+    }
+
+    auto response = RequestRoomLight("GET");
+    if (!response) {
+        return std::unexpected(response.error());
+    }
+    CJsonUniquePtr state(cJSON_Parse(response->c_str()));
+    const auto* brightness = cJSON_GetObjectItemCaseSensitive(state.get(), "brightness");
+    const auto* rgb = cJSON_GetObjectItemCaseSensitive(state.get(), "rgb");
+    const auto* red = cJSON_GetArrayItem(rgb, 0);
+    const auto* green = cJSON_GetArrayItem(rgb, 1);
+    const auto* blue = cJSON_GetArrayItem(rgb, 2);
+    if (!cJSON_IsNumber(brightness) || !cJSON_IsNumber(red) || !cJSON_IsNumber(green) ||
+        !cJSON_IsNumber(blue)) {
+        return std::unexpected("Invalid room light state");
+    }
+
+    std::string body = R"({"on":true)";
+    if (brightness->valueint == 0) {
+        body += R"(,"brightness":20)";
+    }
+    if (red->valueint == 0 && green->valueint == 0 && blue->valueint == 0) {
+        body += R"(,"rgb":[255,255,255])";
+    }
+    body += '}';
+    return UpdateRoomLight(std::move(body));
+}
+
+}  // namespace
 
 class Pca9557 : public I2cDevice {
 public:
@@ -277,6 +372,38 @@ private:
         // Allow switching between press-to-talk (长按说话) and click-to-talk (单击唤醒)
         press_to_talk_tool_ = new PressToTalkMcpTool();
         press_to_talk_tool_->Initialize();
+
+        mcp_server.AddBackgroundTool(
+            "self.room_light.set_power", "Turn the room lamp on or off.",
+            PropertyList({Property("on", kPropertyTypeBoolean)}), SetRoomLightPower);
+        mcp_server.AddBackgroundTool(
+            "self.room_light.set_brightness",
+            "Set the room lamp brightness as a percentage without changing power or color.",
+            PropertyList({Property("brightness", kPropertyTypeInteger, 0, 100)}),
+            [](const PropertyList& properties) {
+                return UpdateRoomLight(R"({"brightness":)" +
+                                       std::to_string(properties["brightness"].value<int>()) + "}");
+            });
+        mcp_server.AddBackgroundTool(
+            "self.room_light.set_color",
+            "Set the room lamp RGB color without changing power. Interpret color descriptions as "
+            "RGB, e.g. clear sky blue is (135, 206, 235). Include brightness (0-100 percent) in "
+            "this same call if requested, or omit it to preserve the current brightness.",
+            PropertyList({Property("r", kPropertyTypeInteger, 0, 255),
+                          Property("g", kPropertyTypeInteger, 0, 255),
+                          Property("b", kPropertyTypeInteger, 0, 255),
+                          Property("brightness", kPropertyTypeInteger, -1, -1, 100)}),
+            [](const PropertyList& properties) {
+                std::string body = R"({"rgb":[)" + std::to_string(properties["r"].value<int>()) +
+                                   "," + std::to_string(properties["g"].value<int>()) + "," +
+                                   std::to_string(properties["b"].value<int>()) + "]";
+                const int brightness = properties["brightness"].value<int>();
+                if (brightness >= 0) {
+                    body += R"(,"brightness":)" + std::to_string(brightness);
+                }
+                body += '}';
+                return UpdateRoomLight(std::move(body));
+            });
     }
 
 public:

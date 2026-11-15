@@ -369,6 +369,13 @@ void McpServer::AddTool(const std::string& name, const std::string& description,
     AddTool(std::make_unique<McpTool>(name, description, properties, std::move(callback)));
 }
 
+void McpServer::AddBackgroundTool(const std::string& name, const std::string& description,
+                                  const PropertyList& properties, ToolCallback callback) {
+    auto tool = std::make_unique<McpTool>(name, description, properties, std::move(callback));
+    tool->set_background();
+    AddTool(std::move(tool));
+}
+
 void McpServer::AddTool(const std::string& name, const std::string& description,
                         const PropertyList& properties, ContextToolCallback callback) {
     AddTool(std::make_unique<McpTool>(name, description, properties, callback));
@@ -745,8 +752,11 @@ void McpServer::DoToolCall(McpRequestContext context, McpTool* tool, const cJSON
     Application::GetInstance().Schedule([this, context = std::move(context), tool,
                                          arguments = std::move(arguments),
                                          response_sender = std::move(response_sender)]() {
-        auto result = tool->Call(arguments, context);
-        if (!result) {
+        auto reply = [this, context, response_sender](std::expected<std::string, std::string> result) {
+            if (result) {
+                ReplyResult(context, *result, response_sender);
+                return;
+            }
             if (context.modern) {
                 std::string error = "{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":";
                 error += JsonString(result.error().c_str());
@@ -755,8 +765,36 @@ void McpServer::DoToolCall(McpRequestContext context, McpTool* tool, const cJSON
             } else {
                 ReplyError(context, result.error(), response_sender);
             }
+        };
+        if (!tool->background()) {
+            reply(tool->Call(arguments, context));
             return;
         }
-        ReplyResult(context, *result, response_sender);
+        if (background_tool_running_) {
+            reply(std::unexpected("Another background tool is running"));
+            return;
+        }
+        using Job = std::function<void()>;
+        auto job = std::make_unique<Job>([this, tool, arguments = std::move(arguments), context,
+                                          reply]() {
+            auto result = tool->Call(arguments, context);
+            Application::GetInstance().Schedule([this, reply, result = std::move(result)]() mutable {
+                background_tool_running_ = false;
+                reply(std::move(result));
+            });
+        });
+        background_tool_running_ = true;
+        auto* pending = job.release();
+        if (xTaskCreate([](void* argument) {
+                {
+                    std::unique_ptr<Job> work(static_cast<Job*>(argument));
+                    (*work)();
+                }
+                vTaskDelete(nullptr);
+            }, "mcp_tool", 6144, pending, 3, nullptr) != pdPASS) {
+            delete pending;
+            background_tool_running_ = false;
+            reply(std::unexpected("Could not start background tool"));
+        }
     });
 }
