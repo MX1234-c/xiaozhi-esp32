@@ -6,11 +6,7 @@
         {
             "name": "lichuang-dev",
             "sdkconfig_append": [
-                "CONFIG_USE_DEVICE_AEC=y",
-                "CONFIG_USE_CUSTOM_WAKE_WORD=y",
-                "CONFIG_SR_MN_EN_MULTINET6_QUANT=y",
-                "CONFIG_CUSTOM_WAKE_WORD=\"HI LINDA\"",
-                "CONFIG_CUSTOM_WAKE_WORD_DISPLAY=\"Hi Linda\""
+                "CONFIG_USE_DEVICE_AEC=y"
             ]
         }
     ]
