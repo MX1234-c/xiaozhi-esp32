@@ -58,5 +58,8 @@
 
 #define XCLK_FREQ_HZ 20000000
 
+// Set to the monitor's LAN URL ending in /api/sensors.
+#define ROOM_ENVIRONMENT_SENSOR_URL "http://192.168.101.239/api/sensors"
+
 
 #endif // _BOARD_CONFIG_H_

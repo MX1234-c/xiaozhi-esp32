@@ -24,41 +24,43 @@
 namespace {
 
 constexpr char kRoomLightUrl[] = "http://192.168.101.246/api/light";
+constexpr char kRoomLightEffectUrl[] = "http://192.168.101.246/api/light/effect";
 
-std::expected<std::string, std::string> RequestRoomLight(const char* method,
-                                                        std::string body = {}) {
+std::expected<std::string, std::string> RequestRoomDevice(const char* method, const char* url,
+                                                         std::string body = {},
+                                                         int expected_status = 200,
+                                                         size_t max_response_size = 512) {
     auto http = Board::GetInstance().GetNetwork()->CreateHttp(0);
     if (!http) {
-        return std::unexpected("Could not create room light HTTP client");
+        return std::unexpected("Could not create room device HTTP client");
     }
     http->SetTimeout(2000);
     if (!body.empty()) {
         http->SetHeader("Content-Type", "application/json");
         http->SetContent(std::move(body));
     }
-    if (!http->Open(method, kRoomLightUrl)) {
-        return std::unexpected("Could not connect to the room light");
+    if (!http->Open(method, url)) {
+        return std::unexpected("Could not connect to the room device");
     }
     const auto status = http->GetStatusCode();
-    if (!status || *status != 200) {
+    if (!status || *status != expected_status) {
         http->Close();
         if (!status) {
-            return std::unexpected("No HTTP response from the room light");
+            return std::unexpected("No HTTP response from the room device");
         }
         if (*status == 202) {
             return std::unexpected("Light settings accepted, but a temporary display is active");
         }
-        return std::unexpected("Room light returned HTTP " + std::to_string(*status));
+        return std::unexpected("Room device returned HTTP " + std::to_string(*status));
     }
 
-    // The lamp returns a small JSON state object.
     std::string response;
     char buffer[128];
     while (true) {
         const auto size = http->Read(buffer, sizeof(buffer));
-        if (!size || response.size() + *size > 512) {
+        if (!size || response.size() + *size > max_response_size) {
             http->Close();
-            return std::unexpected("Could not read room light state");
+            return std::unexpected("Could not read room device response");
         }
         if (*size == 0) {
             break;
@@ -70,7 +72,7 @@ std::expected<std::string, std::string> RequestRoomLight(const char* method,
 }
 
 ToolResult UpdateRoomLight(std::string body) {
-    auto response = RequestRoomLight("POST", std::move(body));
+    auto response = RequestRoomDevice("POST", kRoomLightUrl, std::move(body));
     if (!response) {
         return std::unexpected(response.error());
     }
@@ -82,12 +84,8 @@ ToolResult UpdateRoomLight(std::string body) {
     return ReturnValue(std::move(*response));
 }
 
-ToolResult SetRoomLightPower(const PropertyList& properties) {
-    if (!properties["on"].value<bool>()) {
-        return UpdateRoomLight(R"({"on":false})");
-    }
-
-    auto response = RequestRoomLight("GET");
+std::expected<std::string, std::string> GetRoomLightDefaults() {
+    auto response = RequestRoomDevice("GET", kRoomLightUrl);
     if (!response) {
         return std::unexpected(response.error());
     }
@@ -102,15 +100,61 @@ ToolResult SetRoomLightPower(const PropertyList& properties) {
         return std::unexpected("Invalid room light state");
     }
 
-    std::string body = R"({"on":true)";
+    std::string defaults;
     if (brightness->valueint == 0) {
-        body += R"(,"brightness":20)";
+        defaults += R"(,"brightness":20)";
     }
     if (red->valueint == 0 && green->valueint == 0 && blue->valueint == 0) {
-        body += R"(,"rgb":[255,255,255])";
+        defaults += R"(,"rgb":[255,255,255])";
     }
-    body += '}';
-    return UpdateRoomLight(std::move(body));
+    return defaults;
+}
+
+ToolResult SetRoomLightPower(const PropertyList& properties) {
+    if (!properties["on"].value<bool>()) {
+        return UpdateRoomLight(R"({"on":false})");
+    }
+    auto defaults = GetRoomLightDefaults();
+    if (!defaults) {
+        return std::unexpected(defaults.error());
+    }
+    return UpdateRoomLight(R"({"on":true)" + *defaults + '}');
+}
+
+ToolResult SetRoomLightBlink(const PropertyList& properties) {
+    const int count = properties["count"].value<int>();
+    const bool stop = count == 0;
+    std::string body = R"({"effect":"none"})";
+    if (!stop) {
+        auto defaults = GetRoomLightDefaults();
+        if (!defaults) {
+            return std::unexpected(defaults.error());
+        }
+        body = R"({"effect":"blink","count":)" + std::to_string(count) +
+               R"(,"interval_ms":)" + std::to_string(properties["interval_ms"].value<int>()) +
+               *defaults + '}';
+    }
+    auto response = RequestRoomDevice("POST", kRoomLightEffectUrl, std::move(body), stop ? 200 : 202);
+    if (!response) {
+        return std::unexpected(response.error());
+    }
+    CJsonUniquePtr state(cJSON_Parse(response->c_str()));
+    if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(state.get(), "ok"))) {
+        return std::unexpected("Room light did not confirm the blink effect");
+    }
+    return ReturnValue(std::move(*response));
+}
+
+ToolResult GetRoomEnvironment(const PropertyList&) {
+    auto response = RequestRoomDevice("GET", ROOM_ENVIRONMENT_SENSOR_URL, {}, 200, 1024);
+    if (!response) {
+        return std::unexpected(response.error());
+    }
+    CJsonUniquePtr sensors(cJSON_Parse(response->c_str()));
+    if (!cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(sensors.get(), "co2"))) {
+        return std::unexpected("Invalid room environment sensor response");
+    }
+    return ReturnValue(std::move(*response));
 }
 
 }  // namespace
@@ -373,6 +417,20 @@ private:
         press_to_talk_tool_ = new PressToTalkMcpTool();
         press_to_talk_tool_->Initialize();
 
+        mcp_server.AddBackgroundTool(
+            "self.room_light.blink",
+            "Blink the room lamp and restore its prior state afterward. Count 0 cancels the "
+            "effect. The interval is the time in milliseconds between on and off transitions.",
+            PropertyList({Property("count", kPropertyTypeInteger, 3, 0, 20),
+                          Property("interval_ms", kPropertyTypeInteger, 500, 200, 10000)}),
+            SetRoomLightBlink);
+        if (ROOM_ENVIRONMENT_SENSOR_URL[0] != '\0') {
+            mcp_server.AddBackgroundTool(
+                "self.room_environment.get_readings",
+                "Read current indoor CO2 in ppm, temperature, humidity and pressure if available. "
+                "Only report numbers with valid=true. If CO2 is warming up, say so.",
+                PropertyList(), GetRoomEnvironment);
+        }
         mcp_server.AddBackgroundTool(
             "self.room_light.set_power", "Turn the room lamp on or off.",
             PropertyList({Property("on", kPropertyTypeBoolean)}), SetRoomLightPower);
