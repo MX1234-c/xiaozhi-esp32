@@ -85,6 +85,9 @@ void RegisterFntvMediaTools(McpServer& server) {
                    [](const PropertyList&) { return Request("resume", "POST"); });
     addTool("self.fntv.next", "Play the next Feiniu episode on Windows.", {},
                    [](const PropertyList&) { return Request("next", "POST"); });
+    addTool("self.fntv.fullscreen", "Enter full screen on the Windows Feiniu video player. "
+                                   "Use maximize to leave full screen.", {},
+            [](const PropertyList&) { return Request("fullscreen", "POST"); });
     addTool("self.fntv.maximize", "Restore, maximize and bring the Windows Feiniu video window on top.", {},
             [](const PropertyList&) { return Request("maximize", "POST"); });
     addTool("self.fntv.minimize", "Minimize the Feiniu video window without pausing playback.", {},
