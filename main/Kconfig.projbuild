@@ -1245,4 +1245,23 @@ menu "TAIJIPAI_S3_CONFIG"
         启动双声道
 endmenu
 
+config FNTV_MEDIA_TOOLS
+    bool "Enable Windows Feiniu media tools"
+    default n
+
+if FNTV_MEDIA_TOOLS
+config FNTV_MEDIA_URL
+    string "Windows Feiniu HTTP base URL"
+    default "http://192.168.101.217:18473"
+    help
+        Use the Windows private IPv4 address and port, without a trailing slash.
+
+config FNTV_MEDIA_TOKEN
+    string "Windows Feiniu HTTP Bearer token"
+    default ""
+    help
+        Set the same 64-character token as the Windows player.
+        This value is embedded in the firmware.
+endif
+
 endmenu
