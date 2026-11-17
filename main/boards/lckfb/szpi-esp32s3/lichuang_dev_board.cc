@@ -121,28 +121,53 @@ ToolResult SetRoomLightPower(const PropertyList& properties) {
     return UpdateRoomLight(R"({"on":true)" + *defaults + '}');
 }
 
-ToolResult SetRoomLightBlink(const PropertyList& properties) {
-    const int count = properties["count"].value<int>();
-    const bool stop = count == 0;
-    std::string body = R"({"effect":"none"})";
-    if (!stop) {
-        auto defaults = GetRoomLightDefaults();
-        if (!defaults) {
-            return std::unexpected(defaults.error());
-        }
-        body = R"({"effect":"blink","count":)" + std::to_string(count) +
-               R"(,"interval_ms":)" + std::to_string(properties["interval_ms"].value<int>()) +
-               *defaults + '}';
-    }
-    auto response = RequestRoomDevice("POST", kRoomLightEffectUrl, std::move(body), stop ? 200 : 202);
+ToolResult SendRoomLightEffect(std::string body, int expected_status) {
+    auto response =
+        RequestRoomDevice("POST", kRoomLightEffectUrl, std::move(body), expected_status);
     if (!response) {
         return std::unexpected(response.error());
     }
     CJsonUniquePtr state(cJSON_Parse(response->c_str()));
     if (!cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(state.get(), "ok"))) {
-        return std::unexpected("Room light did not confirm the blink effect");
+        return std::unexpected("Room light did not confirm the effect command");
     }
     return ReturnValue(std::move(*response));
+}
+
+ToolResult StopRoomLightEffect(const PropertyList&) {
+    return SendRoomLightEffect(R"({"effect":"none"})", 200);
+}
+
+ToolResult StartRoomLightEffect(std::string body) {
+    auto defaults = GetRoomLightDefaults();
+    if (!defaults) {
+        return std::unexpected(defaults.error());
+    }
+    body += *defaults;
+    body += '}';
+    return SendRoomLightEffect(std::move(body), 202);
+}
+
+ToolResult SetRoomLightBlink(const PropertyList& properties) {
+    const int count = properties["count"].value<int>();
+    if (count == 0) {
+        return StopRoomLightEffect(properties);
+    }
+    return StartRoomLightEffect(
+        R"({"effect":"blink","count":)" + std::to_string(count) +
+        R"(,"interval_ms":)" + std::to_string(properties["interval_ms"].value<int>()));
+}
+
+ToolResult SetRoomLightBreathing(const PropertyList& properties) {
+    return StartRoomLightEffect(
+        R"({"effect":"breathing","period_ms":)" + std::to_string(properties["period_ms"].value<int>()) +
+        R"(,"duration_ms":)" + std::to_string(properties["duration_ms"].value<int>()));
+}
+
+ToolResult SetRoomLightRainbow(const PropertyList& properties) {
+    return StartRoomLightEffect(
+        R"({"effect":"rainbow","speed":)" + std::to_string(properties["speed"].value<int>()) +
+        R"(,"duration_ms":)" + std::to_string(properties["duration_ms"].value<int>()));
 }
 
 ToolResult GetRoomEnvironment(const PropertyList&) {
@@ -424,6 +449,25 @@ private:
             PropertyList({Property("count", kPropertyTypeInteger, 3, 0, 20),
                           Property("interval_ms", kPropertyTypeInteger, 500, 200, 10000)}),
             SetRoomLightBlink);
+        mcp_server.AddBackgroundTool(
+            "self.room_light.breathe",
+            "Run a breathing or pulsing effect using the room lamp's current color. "
+            "The period is one full dim-to-bright-to-dim cycle in milliseconds. "
+            "The duration is the total time in milliseconds.",
+            PropertyList({Property("period_ms", kPropertyTypeInteger, 3000, 1000, 60000),
+                          Property("duration_ms", kPropertyTypeInteger, 30000, 1000, 120000)}),
+            SetRoomLightBreathing);
+        mcp_server.AddBackgroundTool(
+            "self.room_light.rainbow",
+            "Run the room lamp's moving rainbow effect for colorful cycling colors. "
+            "Higher speed values make it move faster. The duration is in milliseconds.",
+            PropertyList({Property("speed", kPropertyTypeInteger, 50, 1, 100),
+                          Property("duration_ms", kPropertyTypeInteger, 30000, 1000, 120000)}),
+            SetRoomLightRainbow);
+        mcp_server.AddBackgroundTool(
+            "self.room_light.stop_effect",
+            "Stop any active room lamp effect, including blink, breathing, or rainbow.",
+            PropertyList(), StopRoomLightEffect);
         if (ROOM_ENVIRONMENT_SENSOR_URL[0] != '\0') {
             mcp_server.AddBackgroundTool(
                 "self.room_environment.get_readings",
