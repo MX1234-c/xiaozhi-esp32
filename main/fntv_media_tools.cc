@@ -4,6 +4,7 @@
 #include "mcp_server.h"
 #include "sdkconfig.h"
 
+#include <climits>
 #include <string_view>
 
 #ifdef CONFIG_FNTV_MEDIA_TOOLS
@@ -85,6 +86,21 @@ void RegisterFntvMediaTools(McpServer& server) {
                    [](const PropertyList&) { return Request("resume", "POST"); });
     addTool("self.fntv.next", "Play the next Feiniu episode on Windows.", {},
                    [](const PropertyList&) { return Request("next", "POST"); });
+    addTool("self.fntv.seek_relative",
+            "Skip the current Feiniu video by a signed number of seconds. Positive moves forward; "
+            "negative moves backward.",
+            PropertyList({Property("seconds", kPropertyTypeInteger)}),
+            [](const PropertyList& args) {
+                return Request("seek", "POST", "{\"mode\":\"relative\",\"seconds\":" +
+                    std::to_string(args["seconds"].value<int>()) + "}");
+            });
+    addTool("self.fntv.seek_absolute",
+            "Jump to a timestamp in the current Feiniu video. Convert minutes and hours to seconds.",
+            PropertyList({Property("seconds", kPropertyTypeInteger, 0, INT_MAX)}),
+            [](const PropertyList& args) {
+                return Request("seek", "POST", "{\"mode\":\"absolute\",\"seconds\":" +
+                    std::to_string(args["seconds"].value<int>()) + "}");
+            });
     addTool("self.fntv.fullscreen", "Enter full screen on the Windows Feiniu video player. "
                                    "Use maximize to leave full screen.", {},
             [](const PropertyList&) { return Request("fullscreen", "POST"); });
@@ -98,6 +114,14 @@ void RegisterFntvMediaTools(McpServer& server) {
                        return Request("volume", "POST",
                                       "{\"volume\":" + std::to_string(args["volume"].value<int>()) + "}");
                    });
+    addTool("self.fntv.catalog",
+            "Browse available movies and TV series on the Windows Feiniu media library. "
+            "Use this for requests like 'what can I watch?', 'list my library', or for the next page. "
+            "Summarize titles for the user and use the selected itemGuid if they ask to play it.",
+            PropertyList({Property("page", kPropertyTypeInteger, 1, 1, 10000)}),
+            [](const PropertyList& args) {
+                return Request("catalog?page=" + std::to_string(args["page"].value<int>()));
+            });
     addTool("self.fntv.search", "Find Feiniu movies and series by title.",
                    PropertyList({Property("title", kPropertyTypeString)}),
                    [](const PropertyList& args) -> ToolResult {
