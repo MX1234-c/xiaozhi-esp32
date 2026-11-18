@@ -5,6 +5,9 @@
 #include "sdkconfig.h"
 
 #include <climits>
+#include <cstdio>
+#include "mdns.h"
+#include "esp_timer.h"
 #include <string_view>
 
 #ifdef CONFIG_FNTV_MEDIA_TOOLS
@@ -26,7 +29,49 @@ std::string EncodeQuery(std::string_view value) {
     return result;
 }
 
+std::string DiscoverMediaUrl() {
+    static bool initialized = false;
+    static std::string cached;
+    static int64_t expires = 0;
+    if (esp_timer_get_time() < expires) return cached;
+    if (!initialized) {
+        if (mdns_init() != ESP_OK) return {};
+        initialized = true;
+    }
+    mdns_result_t* results = nullptr;
+    if (mdns_query_ptr("_fntv-media", "_tcp", 1800, 8, &results) != ESP_OK) return {};
+    std::string found;
+    size_t count = 0;
+    for (auto* result = results; result; result = result->next) {
+        std::string address;
+        bool compatible = false;
+        for (size_t i = 0; i < result->txt_count; ++i) {
+            auto& txt = result->txt[i];
+            if (!txt.key || !txt.value) continue;
+            if (std::string_view(txt.key) == "version" && std::string_view(txt.value) == "1")
+                compatible = true;
+            if (std::string_view(txt.key) == "address") address = txt.value;
+        }
+        unsigned a, b, c, d;
+        char trailing;
+        if (!compatible || result->port == 0 ||
+            sscanf(address.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &trailing) != 4 ||
+            b > 255 || c > 255 || d > 255 ||
+            !(a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)))
+            continue;
+        const auto url = "http://" + address + ":" + std::to_string(result->port);
+        if (url != found) { found = url; ++count; }
+    }
+    mdns_query_results_free(results);
+    // With several computers, use the configured address to avoid selecting the wrong player.
+    cached = count == 1 ? found : "";
+    expires = esp_timer_get_time() + 30000000;
+    return cached;
+}
+
 ToolResult Request(const std::string& path, const char* method = "GET", std::string body = {}) {
+    auto discovered = DiscoverMediaUrl();
+    const std::string base = discovered.empty() ? CONFIG_FNTV_MEDIA_URL : discovered;
     auto* network = Board::GetInstance().GetNetwork();
     if (!network) return std::unexpected("Windows media network unavailable");
     auto http = network->CreateHttp(3);
@@ -37,7 +82,7 @@ ToolResult Request(const std::string& path, const char* method = "GET", std::str
         http->SetHeader("Content-Type", "application/json");
         http->SetContent(std::move(body));
     }
-    if (!http->Open(method, std::string(CONFIG_FNTV_MEDIA_URL) + "/v1/" + path)) {
+    if (!http->Open(method, base + "/v1/" + path)) {
         return std::unexpected("Cannot connect to Windows media service");
     }
     auto status = http->GetStatusCode();
@@ -78,6 +123,13 @@ void RegisterFntvMediaTools(McpServer& server) {
         tool->set_background();
         server.AddTool(std::move(tool));
     };
+    addTool("self.fntv.discover", "Find the Windows Feiniu player on the local network.", {},
+            [](const PropertyList&) -> ToolResult {
+                const auto url = DiscoverMediaUrl();
+                if (url.empty()) return std::unexpected(
+                    "No unique local Feiniu service found; the configured address will be used.");
+                return ReturnValue{url};
+            });
     addTool("self.fntv.status", "Get Windows Feiniu video title and playback progress.", {},
                    [](const PropertyList&) { return Request("status"); });
     addTool("self.fntv.pause", "Pause Feiniu video on Windows.", {},
