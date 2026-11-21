@@ -8,6 +8,7 @@
 #include "mcp_server.h"
 #include "fntv_media_tools.h"
 #include "water_dispenser_tools.h"
+#include "environment_monitor_tool.h"
 #include "mqtt_protocol.h"
 #include "settings.h"
 #include "system_info.h"
@@ -123,6 +124,7 @@ void Application::Initialize() {
     mcp_server.AddUserOnlyTools();
     RegisterFntvMediaTools(mcp_server);
     RegisterWaterDispenserTools(mcp_server);
+    RegisterEnvironmentMonitorTool(mcp_server);
     // Registration is complete here, so this is the only place the whole inventory exists.
     // It is logged because a server that accepts a bounded number of tools drops the rest
     // quietly: the only sign on this device was an alert at boot and a sad face, which is
