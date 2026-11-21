@@ -1245,6 +1245,18 @@ menu "TAIJIPAI_S3_CONFIG"
         启动双声道
 endmenu
 
+config WATER_DISPENSER_TOOLS
+    bool "Enable LAN water dispenser tools"
+    default y
+
+config WATER_DISPENSER_IPV4
+    string "Water dispenser LAN IPv4 address"
+    depends on WATER_DISPENSER_TOOLS
+    default ""
+    help
+        Enter the private IPv4 address shown on the water dispenser OLED.
+        Only this address is used for status queries and relay commands.
+
 config FNTV_MEDIA_TOOLS
     bool "Enable Windows Feiniu media tools"
     default n
