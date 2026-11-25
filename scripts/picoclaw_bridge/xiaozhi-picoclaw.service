@@ -1,0 +1,15 @@
+[Unit]
+Description=XiaoZhi PicoClaw MCP bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/xiaozhi-picoclaw
+EnvironmentFile=/etc/xiaozhi-picoclaw.env
+ExecStart=/opt/xiaozhi-picoclaw/.venv/bin/python /opt/xiaozhi-picoclaw/bridge.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
