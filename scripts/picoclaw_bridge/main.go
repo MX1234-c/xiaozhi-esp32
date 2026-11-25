@@ -23,7 +23,11 @@ type request struct {
 func handle(cs *cron.CronService, r request) (any, error) {
     switch r.Method {
     case "list_tasks":
-        return cs.ListJobs(true), nil
+        jobs := cs.ListJobs(true)
+        if jobs == nil {
+            jobs = []cron.CronJob{}
+        }
+        return jobs, nil
     case "cancel_task":
         if !cs.RemoveJob(r.ID) { return nil, fmt.Errorf("unknown task ID") }
         return "cancelled", nil

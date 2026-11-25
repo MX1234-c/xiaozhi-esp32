@@ -1245,8 +1245,17 @@ menu "TAIJIPAI_S3_CONFIG"
         启动双声道
 endmenu
 
+config PICOCLAW_LAN_DEVICE_TOOLS
+    bool "Route LAN device tools through the external PicoClaw bridge"
+    default n
+    help
+        Stop advertising the firmware's direct water dispenser and Feiniu
+        tools. Configure the external PicoClaw MCP endpoint before using this
+        option. The ESP32 continues to provide its own hardware tools.
+
 config WATER_DISPENSER_TOOLS
     bool "Enable LAN water dispenser tools"
+    depends on !PICOCLAW_LAN_DEVICE_TOOLS
     default y
 
 config WATER_DISPENSER_IPV4
@@ -1271,6 +1280,7 @@ config ENVIRONMENT_MONITOR_IPV4
 config FNTV_MEDIA_TOOLS
 
     bool "Enable Windows Feiniu media tools"
+    depends on !PICOCLAW_LAN_DEVICE_TOOLS
     default n
 
 if FNTV_MEDIA_TOOLS

@@ -1,3 +1,4 @@
+from contextlib import closing
 import datetime
 import json
 import os
@@ -10,6 +11,8 @@ import time
 
 import jsonschema
 import websocket
+
+import lan_devices
 
 
 def action(name):
@@ -44,6 +47,41 @@ register("cancel_task", "根据列表中的 ID 取消任务", id={"type": "strin
 register("agent_execute", "仅用于需要 PicoClaw 模型推理的复杂任务",
          prompt={"type": "string", "minLength": 1, "maxLength": 4096})
 
+tools["device_control"] = {
+    "name": "device_control",
+    "description": (
+        "局域网设备控制。light 调用 status/on/off/brightness/rgb/set/display/time/"
+        "effect_status/effect_stop/blink/breathing/rainbow。water_dispenser 调用 "
+        "status/heating_on/heating_off/cooling_on/cooling_off，仅按用户明确指示切换。"
+        "fntv 调用 discover/status/pause/resume/next/seek_relative/seek_absolute/"
+        "fullscreen/maximize/minimize/volume/catalog/search/seasons/episodes/play。"
+        "seek 传秒数，播放和剧集查询用工具返回的 itemGuid。"
+    ),
+    "inputSchema": {
+        "type": "object", "required": ["device", "action"], "additionalProperties": False,
+        "properties": {
+            "device": {"enum": ["light", "water_dispenser", "fntv"]},
+            "action": {"type": "string", "maxLength": 32},
+            "seconds": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647},
+            "volume": {"type": "integer", "minimum": 0, "maximum": 100},
+            "page": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "title": {"type": "string", "minLength": 1, "maxLength": 200},
+            "itemGuid": {"type": "string", "minLength": 1, "maxLength": 128},
+            "brightness": {"type": "integer", "minimum": 0, "maximum": 100},
+            "rgb": {"type": "array", "minItems": 3, "maxItems": 3,
+                    "items": {"type": "integer", "minimum": 0, "maximum": 255}},
+            "on": {"type": "boolean"},
+            "text": {"type": "string", "minLength": 1, "maxLength": 40},
+            "duration": {"type": "integer", "minimum": 1, "maximum": 120},
+            "count": {"type": "integer", "minimum": 1, "maximum": 20},
+            "interval_ms": {"type": "integer", "minimum": 200, "maximum": 10000},
+            "period_ms": {"type": "integer", "minimum": 500, "maximum": 60000},
+            "duration_ms": {"type": "integer", "minimum": 1, "maximum": 600000},
+            "speed": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+    },
+}
+
 
 def dispatch(req, schedule):
     if not isinstance(req, dict) or "id" not in req:
@@ -65,8 +103,11 @@ def dispatch(req, schedule):
             jsonschema.validate(args, tools[name]["inputSchema"])
             if name == "execute_action":
                 output = action(args["action"])
+            elif name == "device_control":
+                output = json.dumps(lan_devices.control(**args), ensure_ascii=False)
             elif name == "agent_execute":
-                run = subprocess.run(["picoclaw", "agent", "-m", args["prompt"]],
+                run = subprocess.run(["picoclaw", "--no-color", "agent", "--session", "cli:xiaozhi-picoclaw",
+                                      "-m", args["prompt"]],
                                      capture_output=True, text=True, timeout=90)
                 if run.returncode:
                     raise ValueError("PicoClaw agent exited with code %d" % run.returncode)
@@ -82,8 +123,8 @@ def dispatch(req, schedule):
 
 
 def main():
-    endpoint = os.environ["XIAOZHI_MCP_ENDPOINT"]
-    if not endpoint.startswith("wss://"):
+    endpoint = os.environ.get("XIAOZHI_MCP_ENDPOINT", "")
+    if endpoint and not endpoint.startswith("wss://"):
         raise ValueError("Expected a wss endpoint")
     script = Path(__file__).resolve()
     reader, writer = os.pipe()
@@ -91,6 +132,11 @@ def main():
             [script.with_name("scheduler"), sys.executable, script, str(writer)],
             pass_fds=(writer,), stdin=subprocess.PIPE, text=True, encoding="utf-8") as proc:
         os.close(writer)
+
+        if not endpoint:
+            print("MCP endpoint unset; running scheduler offline", flush=True)
+            proc.wait()
+            raise SystemExit("Scheduler stopped")
 
         def schedule(request):
             proc.stdin.write(json.dumps(request) + "\n")
@@ -105,15 +151,23 @@ def main():
 
         while proc.poll() is None:
             try:
-                with websocket.create_connection(endpoint, timeout=15) as ws:
+                with closing(websocket.create_connection(endpoint, timeout=15)) as ws:
+                    print("MCP WebSocket connected", flush=True)
                     ws.settimeout(None)
                     while True:
                         raw = ws.recv()
                         if not raw:
                             break
-                        response = dispatch(json.loads(raw), schedule)
+                        request = json.loads(raw)
+                        response = dispatch(request, schedule)
                         if response is not None:
                             ws.send(json.dumps(response, ensure_ascii=False))
+                            if request.get("method") == "tools/call":
+                                params = request.get("params")
+                                name = params.get("name") if isinstance(params, dict) else None
+                                if isinstance(name, str) and name in tools:
+                                    status = "error" if response["result"].get("isError") else "ok"
+                                    print(f"MCP tool {name}: {status}", flush=True)
             except (websocket.WebSocketException, OSError, ValueError) as exc:
                 print(type(exc).__name__, file=sys.stderr, flush=True)
             time.sleep(3)

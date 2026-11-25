@@ -1,0 +1,4 @@
+github.com/adhocore/gronx v1.20.0 h1:PD13Mo0wekkZ7ZZR9yb1TqeqTfybs7/K3ez9DmjQwEs=
+github.com/adhocore/gronx v1.20.0/go.mod h1:7oUY1WAU8rEJWmAxXR2DN0JaO4gi9khSgKjiRypqteg=
+github.com/sipeed/picoclaw v0.3.0 h1:9/v03BrU+718Oqj+xJovTp0NrH57T2tZ95rQfu8lDAs=
+github.com/sipeed/picoclaw v0.3.0/go.mod h1:JEPc9VJYs5pyxzIUMeqk+B+r/Sy+nLfaUVTAplT7Gcc=
